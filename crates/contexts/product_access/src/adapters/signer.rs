@@ -348,4 +348,59 @@ mod tests {
         assert!(other.verify_json(&token).is_err(), "wrong key fails");
         assert!(DisabledSigner.verify_json(&token).is_err());
     }
+
+    #[test]
+    fn a_checkout_token_with_changed_terms_fails_verification() {
+        use crate::domain::{CheckoutLine, QuotedTerms};
+        use chrono::DateTime;
+
+        let signer = Ed25519Signer::from_seed_hex("dev-ed25519-1", SEED).unwrap();
+        let claims = CheckoutClaims::new(
+            "555".into(),
+            sanvi_kernel::TenantId::try_from(1001_i64).unwrap(),
+            42,
+            "700".into(),
+            "800".into(),
+            "JPY".into(),
+            vec![CheckoutLine {
+                variant_id: "900".into(),
+                unit_price_minor: 1200,
+                quantity: 2,
+            }],
+            QuotedTerms {
+                pricing_fingerprint: "v1:test".into(),
+                shipping_method_id: None,
+                subtotal_minor: 2400,
+                shipping_minor: 0,
+                tax_minor: 0,
+                total_minor: 2400,
+            },
+            "018f0000000070008000000000000000".into(),
+            DateTime::from_timestamp(1_800_000_900, 0).unwrap(),
+            DateTime::from_timestamp(1_800_000_000, 0).unwrap(),
+        );
+        let token = signer.sign_checkout(&claims).unwrap();
+        assert!(signer.verify_json(&token).is_ok());
+
+        let parts: Vec<_> = token.split('.').collect();
+        for (field, value) in [
+            ("pricing_fingerprint", serde_json::json!("v1:other")),
+            ("total_minor", serde_json::json!(1)),
+            ("shipping_method_id", serde_json::json!("301")),
+        ] {
+            let mut payload: serde_json::Value =
+                serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
+            payload[field] = value;
+            let forged = format!(
+                "{}.{}.{}",
+                parts[0],
+                URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap()),
+                parts[2]
+            );
+            assert!(
+                signer.verify_json(&forged).is_err(),
+                "changing {field} must break the signature"
+            );
+        }
+    }
 }

@@ -30,9 +30,10 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::domain::{
-    CheckoutClaims, CheckoutLine, DelegationClaims, ECOMMERCE, ForwardRequest, HostTenants,
-    PurchaseCredentialClaims, QuotedTerms, ShopperError, StoreBindings, TenantEntitlements,
-    TokenSigner, UpstreamProblem, WEB_CHECKOUT_PERMISSIONS, WEB_CHECKOUT_USER_ID,
+    CheckoutClaims, CheckoutHold, CheckoutLine, DelegationClaims, ECOMMERCE, ForwardRequest,
+    HostTenants, PurchaseCredentialClaims, QuotedTerms, ShopperError, StoreBindings,
+    TenantEntitlements, TokenSigner, UpstreamProblem, WEB_CHECKOUT_PERMISSIONS,
+    WEB_CHECKOUT_USER_ID,
 };
 
 /// Longest forwarded idempotency key the orchestration builds: the
@@ -704,8 +705,11 @@ impl ShopperScope {
                 return Ok(items);
             }
         }
+        // A picker built from a truncated list would silently hide methods.
         tracing::warn!(store_id, "shipping-method scan hit the page cap");
-        Ok(items)
+        Err(ShopperError::BadGateway(
+            "the store has more shipping methods than the checkout can list".to_owned(),
+        ))
     }
 
     pub async fn start_checkout(
@@ -827,20 +831,28 @@ impl ShopperScope {
             )
             .await?;
         let reservation: ReservationDoc = parse_doc(&reservation_reply.body)?;
-        if reservation.status != "held" {
-            return Err(ShopperError::BadGateway(format!(
-                "reservation answered with status {:?}",
-                reservation.status
-            )));
+        match reservation.status.as_str() {
+            "held" => {}
+            // The key replayed a hold that is gone (released, expired or
+            // already committed): this checkout is over and the shopper
+            // restarts it with a fresh key.
+            "released" | "expired" | "committed" => return Err(ShopperError::CheckoutExpired),
+            other => {
+                return Err(ShopperError::BadGateway(format!(
+                    "reservation answered with status {other:?}"
+                )));
+            }
         }
         let expires_at = parse_rfc3339(&reservation.expires_at)?;
 
         // Price the hold the way placement would: the service's quote is
         // the approved money's only source (the catalog scan above stays
-        // for availability). On any failure the fresh hold is released
-        // best-effort — the reservation's expiry remains the backstop —
-        // and the original refusal surfaces unchanged.
-        let quoted = match self
+        // for availability). A refused quote leaves the hold in place on
+        // purpose: the shopper's retry re-presents the same key, replays
+        // this same reservation and re-quotes (another method, another
+        // address) instead of tripping over a released hold. An abandoned
+        // checkout frees its stock when the reservation expires.
+        let quoted = self
             .quote(
                 tenant_id,
                 store_id,
@@ -849,15 +861,7 @@ impl ShopperScope {
                 &address_id,
                 shipping_method_id.as_deref(),
             )
-            .await
-        {
-            Ok(quoted) => quoted,
-            Err(error) => {
-                self.release_hold(tenant_id, store_id, &reservation.id)
-                    .await;
-                return Err(error);
-            }
-        };
+            .await?;
 
         let claims = CheckoutClaims::new(
             reservation.id,
@@ -948,28 +952,6 @@ impl ShopperScope {
         })
     }
 
-    /// Releases a hold this orchestration just created, ignoring failures:
-    /// the reservation's own expiry is the recovery backstop.
-    async fn release_hold(&self, tenant_id: TenantId, store_id: i64, reservation_id: &str) {
-        let result = self
-            .call_service(
-                tenant_id,
-                "POST",
-                &format!("stores/{store_id}/reservations/{reservation_id}/release"),
-                None,
-                None,
-                None,
-            )
-            .await;
-        if let Err(error) = result {
-            tracing::warn!(
-                reservation_id,
-                %error,
-                "checkout setup failed; the hold release failed too — expiry is the backstop"
-            );
-        }
-    }
-
     async fn reuse_or_create_address(
         &self,
         tenant_id: TenantId,
@@ -1041,12 +1023,15 @@ impl ShopperScope {
         checkout_token: &str,
     ) -> Result<(), ShopperError> {
         let (tenant_id, store_id) = self.store_context(host).await?;
-        let claims = self.checkout_claims(checkout_token, tenant_id, store_id, false)?;
+        let hold = self.checkout_hold(checkout_token, tenant_id, store_id)?;
         match self
             .call_service(
                 tenant_id,
                 "POST",
-                &format!("stores/{}/reservations/{}/release", store_id, claims.sub),
+                &format!(
+                    "stores/{}/reservations/{}/release",
+                    store_id, hold.reservation_id
+                ),
                 None,
                 None,
                 None,
@@ -1075,7 +1060,7 @@ impl ShopperScope {
     ) -> Result<ShopperOrderConfirmationView, ShopperError> {
         valid_shopper_key(shopper_key)?;
         let (tenant_id, store_id) = self.store_context(host).await?;
-        let claims = self.checkout_claims(checkout_token, tenant_id, store_id, true)?;
+        let claims = self.checkout_claims(checkout_token, tenant_id, store_id)?;
 
         // Guarded placement: the order commits only when the terms under
         // the service's placement locks still match the quote the shopper
@@ -1427,24 +1412,37 @@ impl ShopperScope {
         token: &str,
         tenant_id: TenantId,
         store_id: i64,
-        require_alive: bool,
     ) -> Result<CheckoutClaims, ShopperError> {
-        let verified =
-            self.signer
-                .verify_json(token)
-                .map_err(|_| ShopperError::CheckoutInvalid {
-                    detail: "the checkout reference is not valid".to_owned(),
-                })?;
-        let claims = CheckoutClaims::from_verified(verified)?;
+        let claims = CheckoutClaims::from_verified(self.verify_checkout(token)?)?;
         if claims.tenant_id != tenant_id.to_string() || claims.store_id != store_id.to_string() {
-            return Err(ShopperError::CheckoutInvalid {
-                detail: "the checkout reference is not valid".to_owned(),
-            });
+            return Err(ShopperError::checkout_invalid());
         }
-        if require_alive && (self.clock)().timestamp() >= claims.exp {
+        if (self.clock)().timestamp() >= claims.exp {
             return Err(ShopperError::CheckoutExpired);
         }
         Ok(claims)
+    }
+
+    /// The reservation a checkout token holds, of any claims generation and
+    /// without an expiry check: releasing is how an expired or legacy hold
+    /// is freed.
+    fn checkout_hold(
+        &self,
+        token: &str,
+        tenant_id: TenantId,
+        store_id: i64,
+    ) -> Result<CheckoutHold, ShopperError> {
+        let hold = CheckoutHold::from_verified(self.verify_checkout(token)?)?;
+        if hold.tenant_id != tenant_id.to_string() || hold.store_id != store_id.to_string() {
+            return Err(ShopperError::checkout_invalid());
+        }
+        Ok(hold)
+    }
+
+    fn verify_checkout(&self, token: &str) -> Result<serde_json::Value, ShopperError> {
+        self.signer
+            .verify_json(token)
+            .map_err(|_| ShopperError::checkout_invalid())
     }
 
     async fn scan_catalog(
@@ -2724,8 +2722,17 @@ mod tests {
     }
 
     /// The checkout harness with the quote's answer overridden (an
-    /// upstream typed problem), for the release-on-failure path.
+    /// upstream typed problem), for the quote-refusal path.
     fn checkout_harness_where_quote(quote_failure: Option<(u16, serde_json::Value)>) -> Harness {
+        checkout_harness_with(quote_failure, "held")
+    }
+
+    /// The checkout harness whose reservation answers with the given
+    /// status (a replayed key can return a hold that is already gone).
+    fn checkout_harness_with(
+        quote_failure: Option<(u16, serde_json::Value)>,
+        reservation_status: &'static str,
+    ) -> Harness {
         harness(
             move |received| match (received.method.as_str(), received.path.as_str()) {
                 ("GET", "stores/42") => (200, vec![], store_body()),
@@ -2810,7 +2817,7 @@ mod tests {
                     201,
                     vec![],
                     serde_json::json!({
-                        "id": "555", "store_id": "42", "status": "held",
+                        "id": "555", "store_id": "42", "status": reservation_status,
                         "expires_at": "2026-01-01T00:15:00Z", "created_at": "2026-01-01T00:00:00Z",
                         "lines": [
                             {"variant_id": "900", "location_id": "5", "quantity": 2},
@@ -3063,7 +3070,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn quote_failure_releases_hold_best_effort() {
+    async fn quote_failure_keeps_the_hold_so_a_same_key_retry_resumes_it() {
         let Harness { upstream, scope } = checkout_harness_where_quote(Some((
             422,
             problem_body(
@@ -3082,13 +3089,6 @@ mod tests {
             other => panic!("expected the upstream refusal, got {other:?}"),
         };
         assert_eq!(problem, "ecommerce/destination-not-served");
-        assert_eq!(
-            upstream
-                .calls_to("stores/42/reservations/555/release")
-                .len(),
-            1,
-            "the fresh hold is released best-effort"
-        );
         assert!(
             upstream
                 .calls()
@@ -3096,6 +3096,30 @@ mod tests {
                 .any(|call| call.path == "stores/42/reservations"),
             "the hold was created before the quote failed"
         );
+        // Releasing would make the retry's idempotent replay return a dead
+        // reservation; the hold stays and its expiry is the backstop.
+        assert!(
+            upstream
+                .calls_to("stores/42/reservations/555/release")
+                .is_empty(),
+            "a refused quote must not release the hold"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_replayed_hold_that_is_gone_ends_the_checkout_as_expired() {
+        for status in ["released", "expired", "committed"] {
+            let Harness { upstream, scope } = checkout_harness_with(None, status);
+            let error = scope
+                .start_checkout("shop.acme.test", "key-gone", &request_checkout())
+                .await
+                .unwrap_err();
+            assert_eq!(error, ShopperError::CheckoutExpired, "status {status}");
+            assert!(
+                upstream.calls_to("stores/42/orders/quote").is_empty(),
+                "a dead hold is never quoted ({status})"
+            );
+        }
     }
 
     #[tokio::test]
@@ -3235,6 +3259,47 @@ mod tests {
                 .calls_to("stores/42/reservations/555/release")
                 .len(),
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn a_legacy_checkout_token_can_still_release_its_hold() {
+        let Harness { upstream, scope } = harness(|received| {
+            match (received.method.as_str(), received.path.as_str()) {
+                ("GET", "stores/42") => (200, vec![], store_body()),
+                ("POST", "stores/42/reservations/555/release") => (
+                    200,
+                    vec![],
+                    serde_json::json!({"id": "555", "store_id": "42", "status": "released", "expires_at": "2026-01-01T00:15:00Z", "created_at": "2026-01-01T00:00:00Z", "lines": []}),
+                ),
+                _ => (404, vec![], problem_body("not-found", 404, "no such route")),
+            }
+        });
+        let legacy = serde_json::json!({
+            "iss": crate::domain::ISSUER,
+            "aud": crate::domain::CHECKOUT_AUDIENCE,
+            "sub": "555",
+            "tenant_id": "1001",
+            "store_id": "42",
+            "customer_id": "700",
+            "shipping_address_id": "800",
+            "currency": "JPY",
+            "lines": [],
+            "jti": "018f0000000070008000000000000000",
+            "iat": NOW_SECS,
+            "exp": NOW_SECS + 900,
+        });
+        let token = format!("checkout:{}", serde_json::to_string(&legacy).unwrap());
+        scope
+            .release_checkout("shop.acme.test", &token)
+            .await
+            .unwrap();
+        assert_eq!(
+            upstream
+                .calls_to("stores/42/reservations/555/release")
+                .len(),
+            1,
+            "the legacy token frees its stock instead of waiting for expiry"
         );
     }
 
@@ -3576,6 +3641,27 @@ mod tests {
         assert_eq!(call.query.as_deref(), Some("status=active&limit=100"));
         assert!(!call.query.as_deref().unwrap().contains("archived"));
         assert!(!call.query.as_deref().unwrap().contains("all"));
+    }
+
+    #[tokio::test]
+    async fn an_oversized_shipping_list_fails_instead_of_truncating() {
+        let Harness { scope, .. } =
+            harness(
+                |received| match (received.method.as_str(), received.path.as_str()) {
+                    ("GET", "stores/42") => (200, vec![], store_body()),
+                    ("GET", "stores/42/shipping-methods") => (
+                        200,
+                        vec![],
+                        serde_json::json!({"items": [], "next_cursor": "more"}),
+                    ),
+                    _ => (404, vec![], problem_body("not-found", 404, "no such route")),
+                },
+            );
+        let error = scope.shipping_methods("shop.acme.test").await.unwrap_err();
+        assert!(
+            matches!(error, ShopperError::BadGateway(_)),
+            "a picker must never silently hide methods: {error:?}"
+        );
     }
 
     // ------------------------------------------------------------------

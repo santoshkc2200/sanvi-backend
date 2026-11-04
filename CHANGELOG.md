@@ -29,12 +29,18 @@ payment contracts, not only locally minted tokens.
 - Checkout start prices the hold with the service's quote instead of
   catalog math: the opaque fingerprint and complete totals are signed
   into the checkout claims (legacy pre-quote tokens are refused with 409
-  `checkout-refresh-required` at placement).
+  `ecommerce/checkout-refresh-required` at placement).
 - Placement is guarded: it sends the claims' fingerprint and shipping
   method, maps the service's `ecommerce/checkout-price-changed` to the
   shopper's re-approval state with the hold intact, and the
   post-placement price comparison and compensating cancel are retired.
   Ambiguous-timeout retries re-present the original request and key.
+- A refused quote keeps the checkout's hold so a retry with the same key
+  resumes it instead of replaying a released reservation; a key whose hold
+  is already gone answers 409 `ecommerce/checkout-expired`. Legacy
+  pre-quote tokens can still release their hold, and a store with more
+  shipping methods than the checkout can list fails instead of showing a
+  truncated picker.
 - The product proxy forwards `Cache-Control` so the services' no-store
   reaches the browser on quote-derived and shipping-list answers.
 

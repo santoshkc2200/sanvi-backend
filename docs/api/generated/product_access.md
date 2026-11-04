@@ -14,8 +14,11 @@ creates the guest customer and address, picks reservation locations
 from live stock, holds the reservation and then prices the hold with
 the service's quote. The response is the only pricing a checkout page
 may show — the quoted totals, with the fingerprint bound inside the
-opaque `checkout` token that dies with the hold. A failed quote
-releases the fresh hold best-effort. Refusals: 409
+opaque `checkout` token that dies with the hold. A refused quote keeps
+the hold: retrying with the same `Idempotency-Key` resumes it (a
+different method or address re-quotes it) and an abandoned one
+expires. A key whose hold is already gone answers 409
+`ecommerce/checkout-expired`; restart with a fresh key. Refusals: 409
 `ecommerce/insufficient-stock` (with `lines` indexes; nothing is
 held), the quote's own typed 409/422 problems, 400 validation.
 
@@ -148,7 +151,7 @@ Operation: `public_ecommerce_checkout_release`
 checkout token names (abandonment path). Idempotent; accepts tokens
 whose hold already expired.
 
-Responses: 204, 400, 409, 502, 503
+Responses: 204, 400, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |

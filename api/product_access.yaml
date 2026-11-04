@@ -2997,8 +2997,11 @@ paths:
         from live stock, holds the reservation and then prices the hold with
         the service's quote. The response is the only pricing a checkout page
         may show — the quoted totals, with the fingerprint bound inside the
-        opaque `checkout` token that dies with the hold. A failed quote
-        releases the fresh hold best-effort. Refusals: 409
+        opaque `checkout` token that dies with the hold. A refused quote keeps
+        the hold: retrying with the same `Idempotency-Key` resumes it (a
+        different method or address re-quotes it) and an abandoned one
+        expires. A key whose hold is already gone answers 409
+        `ecommerce/checkout-expired`; restart with a fresh key. Refusals: 409
         `ecommerce/insufficient-stock` (with `lines` indexes; nothing is
         held), the quote's own typed 409/422 problems, 400 validation.
       tags:
@@ -3028,12 +3031,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: The checkout reference is not valid
-        '409':
-          content:
-            application/problem+json:
-              schema:
-                $ref: '#/components/schemas/ProblemDetail'
-          description: 'Checkout terms need re-approval (`checkout-refresh-required`: a legacy pre-quote token cannot be released; its hold expires)'
         '502':
           content:
             application/problem+json:
@@ -3098,7 +3095,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: 'Checkout expired, checkout terms need re-approval (`checkout-refresh-required`: a legacy pre-quote token), prices changed, reservation expired or already ordered (typed problem)'
+          description: 'Checkout expired, checkout terms need re-approval (`ecommerce/checkout-refresh-required`: a legacy pre-quote token), prices changed, reservation expired or already ordered (typed problem)'
         '422':
           content:
             application/problem+json:

@@ -416,11 +416,11 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/product_access/src/adapters/http/handlers.rs | `f473c438b7e3925e6a438c0ec3da5cf8e9a018c6a063e27e58a8c79785e59f16` |
 | crates/contexts/product_access/src/adapters/http/mod.rs | `a4560ca1f00004ed1a2533319bebd2b0362300d596f6dd978c96855ab46364f3` |
 | crates/contexts/product_access/src/adapters/http/routes.rs | `4efdb17033a66cc9cdf47b4eac40970e41e06506f0d65221c91441846327b5a0` |
-| crates/contexts/product_access/src/adapters/http/shopper_handlers.rs | `ba6ab8bcc83e94034bae5ff0ead5ef23b1da6a8c047ee657f792a76befae1b85` |
+| crates/contexts/product_access/src/adapters/http/shopper_handlers.rs | `b45422cbc934d39b382b15e7ae39853d8f3b51c4c3ea522582c2e30e320c8d04` |
 | crates/contexts/product_access/src/application/mod.rs | `8e486700d7f0b7131d58a6f9f1979a9bc5fe603ccd290893359208416ace49a1` |
-| crates/contexts/product_access/src/application/shopper.rs | `023044148ee579e457314576e77e7076b9b7115e058b9bbb740d28a32e22fd81` |
+| crates/contexts/product_access/src/application/shopper.rs | `da972996ab4627a1e1328219e028187ff07f214d668a982ff7f0a714d6e8f6be` |
 | crates/contexts/product_access/src/domain/delegation.rs | `cdc158a4936885dd08e2ec10ccf092877f0175f18d5c50dae47547563d0ce5d3` |
-| crates/contexts/product_access/src/domain/shopper.rs | `a3335ac9fec2def7bfc4248e828c8ee399351820c58363e6f0ddf50c92491ad3` |
+| crates/contexts/product_access/src/domain/shopper.rs | `af4cb7619ce8e6648ef59f1948c9a222a0f87bd80c31a0c3bfff8f0b2044cfde` |
 | crates/contexts/system/src/adapters/http/handlers.rs | `e960b2e416f59193f64a5dcdf9838e5dd518dcd0b0e086829c2d925ecb5ec8f7` |
 | crates/contexts/system/src/adapters/http/mod.rs | `c7451cf2f661b8ab7dbd686218fb0d25b6875aa2cc3dce21970630c2e46016f0` |
 | crates/contexts/system/src/adapters/http/routes.rs | `fe6b66da6a7728ec4490dcb503ae1b4be92d3529003b49e21bec965af69e67da` |
