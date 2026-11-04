@@ -15,8 +15,9 @@ use sanvi_product_access::adapters::http::ProductAccessState;
 use sanvi_product_access::adapters::{Ed25519Signer, HttpProductUpstream};
 use sanvi_product_access::application::{ProxyImportRequest, ProxyRequest, ShopperScope};
 use sanvi_product_access::domain::{
-    CONNECTORS, ECOMMERCE, EntitlementView, HostTenants, ProductAccessError, RolePermissions,
-    ShopperTenant, StoreBindings, TenantEntitlements,
+    CONNECTORS, CheckoutAllocation, CheckoutReservations, ECOMMERCE, EntitlementView, HostTenants,
+    ProductAccessError, RolePermissions, ShopperError, ShopperTenant, StoreBindings,
+    TenantEntitlements,
 };
 use sanvi_product_access::routes::{
     product_access_public_routes, product_access_tenant_scope_routes,
@@ -198,6 +199,7 @@ fn state(base_url: &str, grants: Grants) -> ProductAccessState {
             Arc::new(NoHostTenants),
             grants.clone(),
             Arc::new(NoBindings),
+            Arc::new(NoReservations),
             signer,
             Arc::new(HttpProductUpstream::new(&ECOMMERCE, base_url, SERVICE_KEY).unwrap()),
             3600,
@@ -236,6 +238,7 @@ fn public_state(base_url: &str, grants: Grants) -> ProductAccessState {
             Arc::new(FixedHosts),
             grants.clone(),
             Arc::new(BoundStore),
+            Arc::new(NoReservations),
             signer,
             Arc::new(HttpProductUpstream::new(&ECOMMERCE, base_url, SERVICE_KEY).unwrap()),
             3600,
@@ -683,4 +686,26 @@ async fn shipping_list_is_no_store() {
         methods.uri, "/v1/stores/42/shipping-methods?status=active&limit=100",
         "the shopper's status/limit never reach the service"
     );
+}
+
+struct NoReservations;
+#[async_trait]
+impl CheckoutReservations for NoReservations {
+    async fn load(
+        &self,
+        _: TenantId,
+        _: i64,
+        _: &str,
+    ) -> Result<Option<Vec<CheckoutAllocation>>, ShopperError> {
+        unreachable!("not a checkout test")
+    }
+    async fn remember(
+        &self,
+        _: TenantId,
+        _: i64,
+        _: &str,
+        _: Vec<CheckoutAllocation>,
+    ) -> Result<Vec<CheckoutAllocation>, ShopperError> {
+        unreachable!("not a checkout test")
+    }
 }

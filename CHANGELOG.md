@@ -41,6 +41,10 @@ payment contracts, not only locally minted tokens.
   pre-quote tokens can still release their hold, and a store with more
   shipping methods than the checkout can list fails instead of showing a
   truncated picker.
+- Checkout retries persist the original stock allocation before reserving,
+  so their own hold cannot fail the free-stock check or change locations.
+  Address corrections use a content-specific creation key while retaining
+  the reservation key; cart edits require a new checkout key.
 - The product proxy forwards `Cache-Control` so the services' no-store
   reaches the browser on quote-derived and shipping-list answers.
 

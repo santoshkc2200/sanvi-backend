@@ -350,7 +350,7 @@ pub async fn get_public_shipping_methods(
     tag = "product_access",
     operation_id = "public_ecommerce_checkout_start",
     params(
-        ("Idempotency-Key" = String, Header, description = "One key per checkout intent; reused across retries of the same intent, re-minted after a payload edit"),
+        ("Idempotency-Key" = String, Header, description = "One key per cart and contact; reused across retries and shipping method or address corrections, re-minted after cart or contact edits"),
         ("host" = Option<String>, Query, description = "Host override for server-side callers; defaults to the request Host")
     ),
     request_body = crate::application::shopper::ShopperStartCheckoutRequest,

@@ -2929,7 +2929,7 @@ paths:
     post:
       operationId: public_ecommerce_checkout_start
       parameters:
-      - description: One key per checkout intent; reused across retries of the same intent, re-minted after a payload edit
+      - description: One key per cart and contact; reused across retries and shipping method or address corrections, re-minted after cart or contact edits
         in: header
         name: Idempotency-Key
         required: true

@@ -30,10 +30,10 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::domain::{
-    CheckoutClaims, CheckoutHold, CheckoutLine, DelegationClaims, ECOMMERCE, ForwardRequest,
-    HostTenants, PurchaseCredentialClaims, QuotedTerms, ShopperError, StoreBindings,
-    TenantEntitlements, TokenSigner, UpstreamProblem, WEB_CHECKOUT_PERMISSIONS,
-    WEB_CHECKOUT_USER_ID,
+    CheckoutAllocation, CheckoutClaims, CheckoutHold, CheckoutLine, CheckoutReservations,
+    DelegationClaims, ECOMMERCE, ForwardRequest, HostTenants, PurchaseCredentialClaims,
+    QuotedTerms, ShopperError, StoreBindings, TenantEntitlements, TokenSigner, UpstreamProblem,
+    WEB_CHECKOUT_PERMISSIONS, WEB_CHECKOUT_USER_ID,
 };
 
 /// Longest forwarded idempotency key the orchestration builds: the
@@ -324,6 +324,7 @@ pub struct ShopperScope {
     host_tenants: Arc<dyn HostTenants>,
     entitlements: Arc<dyn TenantEntitlements>,
     bindings: Arc<dyn StoreBindings>,
+    reservations: Arc<dyn CheckoutReservations>,
     signer: Arc<dyn TokenSigner>,
     upstream: Arc<dyn crate::domain::ProductUpstream>,
     clock: fn() -> DateTime<Utc>,
@@ -336,6 +337,7 @@ impl ShopperScope {
         host_tenants: Arc<dyn HostTenants>,
         entitlements: Arc<dyn TenantEntitlements>,
         bindings: Arc<dyn StoreBindings>,
+        reservations: Arc<dyn CheckoutReservations>,
         signer: Arc<dyn TokenSigner>,
         upstream: Arc<dyn crate::domain::ProductUpstream>,
         credential_ttl_secs: i64,
@@ -344,6 +346,7 @@ impl ShopperScope {
             host_tenants,
             entitlements,
             bindings,
+            reservations,
             signer,
             upstream,
             clock: Utc::now,
@@ -732,47 +735,72 @@ impl ShopperScope {
         let (tenant_id, store_id) = self.store_context(host).await?;
         let store = self.active_store(tenant_id, store_id).await?;
 
-        // Price the lines from the catalog and refuse anything that is not
-        // sellable right now (identifiers in, prices never).
-        let catalog = self.scan_catalog(tenant_id, store_id).await?;
-        let mut unreserved: Vec<i64> = Vec::new();
-        let mut priced: Vec<(usize, &ProductDoc, &VariantDoc)> = Vec::new();
-        for (index, line) in input.lines.iter().enumerate() {
-            match catalog.variants.get(&line.variant_id) {
-                Some((product, variant)) if product.status == "active" && !variant.archived => {
-                    priced.push((index, product, variant));
+        let reservation_lines = if let Some(lines) = self
+            .reservations
+            .load(tenant_id, store_id, shopper_key)
+            .await?
+        {
+            lines
+        } else {
+            // Price the lines from the catalog and refuse anything that is not
+            // sellable right now (identifiers in, prices never).
+            let catalog = self.scan_catalog(tenant_id, store_id).await?;
+            let mut unreserved: Vec<i64> = Vec::new();
+            let mut priced: Vec<(usize, &ProductDoc, &VariantDoc)> = Vec::new();
+            for (index, line) in input.lines.iter().enumerate() {
+                match catalog.variants.get(&line.variant_id) {
+                    Some((product, variant)) if product.status == "active" && !variant.archived => {
+                        priced.push((index, product, variant));
+                    }
+                    _ => unreserved.push(index as i64),
                 }
-                _ => unreserved.push(index as i64),
             }
-        }
 
-        // Pick each line's reservation location from live stock.
-        let wanted: Vec<String> = priced
-            .iter()
-            .map(|(_, _, variant)| variant.id.clone())
-            .collect();
-        let availability = self
-            .availability_map(tenant_id, store_id, Some(&wanted))
-            .await?;
-        let mut reservation_lines: Vec<ReservationLineIn> = Vec::new();
-        for (index, _, variant) in &priced {
-            let quantity = input.lines[*index].quantity;
-            match availability.get(&variant.id) {
-                Some((location_id, available)) if *available >= quantity => {
-                    reservation_lines.push(ReservationLineIn {
-                        variant_id: variant.id.clone(),
-                        location_id: location_id.clone(),
-                        quantity,
-                    });
+            // Pick each line's reservation location from live stock.
+            let wanted: Vec<String> = priced
+                .iter()
+                .map(|(_, _, variant)| variant.id.clone())
+                .collect();
+            let availability = self
+                .availability_map(tenant_id, store_id, Some(&wanted))
+                .await?;
+            let mut reservation_lines: Vec<CheckoutAllocation> = Vec::new();
+            for (index, _, variant) in &priced {
+                let quantity = input.lines[*index].quantity;
+                match availability.get(&variant.id) {
+                    Some((location_id, available)) if *available >= quantity => {
+                        reservation_lines.push(CheckoutAllocation {
+                            variant_id: variant.id.clone(),
+                            location_id: location_id.clone(),
+                            quantity,
+                        });
+                    }
+                    _ => unreserved.push(*index as i64),
                 }
-                _ => unreserved.push(*index as i64),
             }
-        }
-        if !unreserved.is_empty() {
-            unreserved.sort_unstable();
-            return Err(ShopperError::Upstream(Box::new(insufficient_stock(
-                &unreserved,
-            ))));
+            if !unreserved.is_empty() {
+                unreserved.sort_unstable();
+                return Err(ShopperError::Upstream(Box::new(insufficient_stock(
+                    &unreserved,
+                ))));
+            }
+
+            self.reservations
+                .remember(tenant_id, store_id, shopper_key, reservation_lines)
+                .await?
+        };
+        // Address and method edits may re-quote the hold, but a cart edit
+        // is a different intent and must never silently reuse old stock.
+        if reservation_lines.len() != input.lines.len()
+            || input.lines.iter().any(|line| {
+                !reservation_lines.iter().any(|held| {
+                    held.variant_id == line.variant_id && held.quantity == line.quantity
+                })
+            })
+        {
+            return Err(ShopperError::CheckoutInvalid {
+                detail: "the checkout key belongs to a different cart; use a fresh key".to_owned(),
+            });
         }
 
         // Guest customer: create one, or adopt the one this email already
@@ -1000,6 +1028,20 @@ impl ShopperScope {
             "country": input.address.country,
             "phone": input.address.phone,
         });
+        // A corrected address is a separate creation intent. Hash both the
+        // shopper key and normalized payload to keep retries stable without
+        // putting address data in headers or exceeding the key length limit.
+        let address_key = format!(
+            "web-addr-{}",
+            hex::encode(
+                ring::digest::digest(
+                    &ring::digest::SHA256,
+                    &serde_json::to_vec(&(shopper_key, customer_id, &payload))
+                        .map_err(|e| ShopperError::Storage(e.to_string()))?,
+                )
+                .as_ref()
+            )
+        );
         let reply = self
             .call_service(
                 tenant_id,
@@ -1007,7 +1049,7 @@ impl ShopperScope {
                 &format!("customers/{customer_id}/addresses"),
                 None,
                 Some(payload),
-                Some(&format!("web-addr-{shopper_key}")),
+                Some(&address_key),
             )
             .await?;
         Ok(parse_doc::<CustomerDoc>(&reply.body)?.id)
@@ -2133,12 +2175,6 @@ pub struct AttemptListDoc {
     pub items: Vec<AttemptDoc>,
 }
 
-struct ReservationLineIn {
-    variant_id: String,
-    location_id: String,
-    quantity: i64,
-}
-
 /// What the service's quote returned, parsed: the approved terms, the
 /// priced lines, and the selected method's display name (view metadata
 /// only; the signed terms stay the source of truth).
@@ -2170,6 +2206,41 @@ mod tests {
     // ------------------------------------------------------------------
     // Fakes
     // ------------------------------------------------------------------
+
+    type AllocationKey = (TenantId, i64, String);
+    #[derive(Default)]
+    struct MemoryReservations(Mutex<BTreeMap<AllocationKey, Vec<CheckoutAllocation>>>);
+    #[async_trait]
+    impl CheckoutReservations for MemoryReservations {
+        async fn load(
+            &self,
+            tenant: TenantId,
+            store: i64,
+            key: &str,
+        ) -> Result<Option<Vec<CheckoutAllocation>>, ShopperError> {
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .get(&(tenant, store, key.to_owned()))
+                .cloned())
+        }
+        async fn remember(
+            &self,
+            tenant: TenantId,
+            store: i64,
+            key: &str,
+            lines: Vec<CheckoutAllocation>,
+        ) -> Result<Vec<CheckoutAllocation>, ShopperError> {
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .entry((tenant, store, key.to_owned()))
+                .or_insert(lines)
+                .clone())
+        }
+    }
 
     struct Fixed(Vec<EntitlementView>);
 
@@ -2439,6 +2510,7 @@ mod tests {
             Arc::new(FixedHosts(active_tenant())),
             Arc::new(Fixed(entitled())),
             FixedBinding::bound(Some(42)),
+            Arc::new(MemoryReservations::default()),
             Arc::new(JsonSigner),
             upstream.clone(),
             3600,
@@ -2504,6 +2576,7 @@ mod tests {
             Arc::new(FixedHosts(None)),
             Arc::new(Fixed(entitled())),
             upstream_binding.clone(),
+            Arc::new(MemoryReservations::default()),
             Arc::new(JsonSigner),
             upstream.clone(),
             3600,
@@ -2521,6 +2594,7 @@ mod tests {
             }))),
             Arc::new(Fixed(entitled())),
             upstream_binding.clone(),
+            Arc::new(MemoryReservations::default()),
             Arc::new(JsonSigner),
             upstream.clone(),
             3600,
@@ -2535,6 +2609,7 @@ mod tests {
             Arc::new(FixedHosts(active_tenant())),
             Arc::new(Fixed(entitled())),
             FixedBinding::bound(None),
+            Arc::new(MemoryReservations::default()),
             Arc::new(JsonSigner),
             upstream.clone(),
             3600,
@@ -2553,6 +2628,7 @@ mod tests {
                 limit: None,
             }])),
             upstream_binding,
+            Arc::new(MemoryReservations::default()),
             Arc::new(JsonSigner),
             upstream.clone(),
             3600,
@@ -2570,6 +2646,7 @@ mod tests {
             Arc::new(FixedHosts(active_tenant())),
             Arc::new(Fixed(entitled())),
             FixedBinding::bound(Some(42)),
+            Arc::new(MemoryReservations::default()),
             Arc::new(JsonSigner),
             upstream.clone(),
             3600,
@@ -2733,112 +2810,114 @@ mod tests {
         quote_failure: Option<(u16, serde_json::Value)>,
         reservation_status: &'static str,
     ) -> Harness {
-        harness(
-            move |received| match (received.method.as_str(), received.path.as_str()) {
-                ("GET", "stores/42") => (200, vec![], store_body()),
-                ("GET", "stores/42/products") => (
+        harness(move |received| checkout_reply(received, &quote_failure, reservation_status))
+    }
+
+    fn checkout_reply(
+        received: &Received,
+        quote_failure: &Option<(u16, serde_json::Value)>,
+        reservation_status: &str,
+    ) -> (u16, Vec<(String, String)>, serde_json::Value) {
+        match (received.method.as_str(), received.path.as_str()) {
+            ("GET", "stores/42") => (200, vec![], store_body()),
+            ("GET", "stores/42/products") => (
+                200,
+                vec![],
+                serde_json::json!({
+                    "items": [product("700", "active", serde_json::json!([
+                        variant("900", 1200, false),
+                        variant("901", 1500, false)
+                    ]))],
+                    "next_cursor": serde_json::Value::Null
+                }),
+            ),
+            ("GET", "stores/42/locations") => (
+                200,
+                vec![],
+                serde_json::json!({"items": [{"id": "5"}, {"id": "6"}], "next_after": serde_json::Value::Null}),
+            ),
+            ("GET", "stores/42/stock") => {
+                let location_5 = received
+                    .query
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("location_id=5");
+                let rows = if location_5 {
+                    serde_json::json!([
+                        {"location_id": "5", "variant_id": "900", "on_hand": 10, "safety_stock": 1, "held": 0, "available": 9}
+                    ])
+                } else {
+                    serde_json::json!([
+                        {"location_id": "6", "variant_id": "901", "on_hand": 3, "safety_stock": 1, "held": 0, "available": 2}
+                    ])
+                };
+                (
                     200,
                     vec![],
-                    serde_json::json!({
-                        "items": [product("700", "active", serde_json::json!([
-                            variant("900", 1200, false),
-                            variant("901", 1500, false)
-                        ]))],
-                        "next_cursor": serde_json::Value::Null
-                    }),
-                ),
-                ("GET", "stores/42/locations") => (
-                    200,
-                    vec![],
-                    serde_json::json!({"items": [{"id": "5"}, {"id": "6"}], "next_after": serde_json::Value::Null}),
-                ),
-                ("GET", "stores/42/stock") => {
-                    let location_5 = received
-                        .query
-                        .as_deref()
-                        .unwrap_or_default()
-                        .contains("location_id=5");
-                    let rows = if location_5 {
-                        serde_json::json!([
-                            {"location_id": "5", "variant_id": "900", "on_hand": 10, "safety_stock": 1, "held": 0, "available": 9}
-                        ])
-                    } else {
-                        serde_json::json!([
-                            {"location_id": "6", "variant_id": "901", "on_hand": 3, "safety_stock": 1, "held": 0, "available": 2}
-                        ])
-                    };
+                    serde_json::json!({"items": rows, "next_after": serde_json::Value::Null}),
+                )
+            }
+            ("POST", "customers") => {
+                let email_taken =
+                    received.body.get("email") == Some(&serde_json::json!("taken@example.com"));
+                if email_taken {
                     (
-                        200,
+                        409,
                         vec![],
-                        serde_json::json!({"items": rows, "next_after": serde_json::Value::Null}),
+                        serde_json::json!({
+                            "type": "https://sanvi.dev/problems/ecommerce/customer-email-taken",
+                            "title": "email taken", "status": 409, "detail": "that email already has a customer",
+                            "customer_id": "777"
+                        }),
                     )
-                }
-                ("POST", "customers") => {
-                    let email_taken =
-                        received.body.get("email") == Some(&serde_json::json!("taken@example.com"));
-                    if email_taken {
-                        (
-                            409,
-                            vec![],
-                            serde_json::json!({
-                                "type": "https://sanvi.dev/problems/ecommerce/customer-email-taken",
-                                "title": "email taken", "status": 409, "detail": "that email already has a customer",
-                                "customer_id": "777"
-                            }),
-                        )
-                    } else {
-                        (
-                            201,
-                            vec![],
-                            serde_json::json!({"id": "700", "status": "active", "version": 1, "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"}),
-                        )
-                    }
-                }
-                ("GET", "customers/700/addresses") => (
-                    200,
-                    vec![],
-                    serde_json::json!({"items": [], "next_cursor": serde_json::Value::Null}),
-                ),
-                ("GET", "customers/777/addresses") => (
-                    200,
-                    vec![],
-                    serde_json::json!({"items": [], "next_cursor": serde_json::Value::Null}),
-                ),
-                ("POST", path)
-                    if path.starts_with("customers/") && path.ends_with("/addresses") =>
-                {
+                } else {
                     (
                         201,
                         vec![],
-                        serde_json::json!({"id": "800", "customer_id": "700", "status": "active", "created_at": "2026-01-01T00:00:00Z"}),
+                        serde_json::json!({"id": "700", "status": "active", "version": 1, "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"}),
                     )
                 }
-                ("POST", "stores/42/reservations") => (
-                    201,
-                    vec![],
-                    serde_json::json!({
-                        "id": "555", "store_id": "42", "status": reservation_status,
-                        "expires_at": "2026-01-01T00:15:00Z", "created_at": "2026-01-01T00:00:00Z",
-                        "lines": [
-                            {"variant_id": "900", "location_id": "5", "quantity": 2},
-                            {"variant_id": "901", "location_id": "6", "quantity": 1}
-                        ]
-                    }),
-                ),
-                ("POST", "stores/42/orders/quote") => {
-                    if let Some((status, body)) = &quote_failure {
-                        return (*status, vec![], body.clone());
-                    }
-                    let method = received
-                        .body
-                        .get("shipping_method_id")
-                        .and_then(|value| value.as_str())
-                        .map(|id| (id.to_owned(), "Standard delivery".to_owned(), 500_i64));
-                    (200, vec![], quote_body(method))
+            }
+            ("GET", "customers/700/addresses") => (
+                200,
+                vec![],
+                serde_json::json!({"items": [], "next_cursor": serde_json::Value::Null}),
+            ),
+            ("GET", "customers/777/addresses") => (
+                200,
+                vec![],
+                serde_json::json!({"items": [], "next_cursor": serde_json::Value::Null}),
+            ),
+            ("POST", path) if path.starts_with("customers/") && path.ends_with("/addresses") => (
+                201,
+                vec![],
+                serde_json::json!({"id": "800", "customer_id": "700", "status": "active", "created_at": "2026-01-01T00:00:00Z"}),
+            ),
+            ("POST", "stores/42/reservations") => (
+                201,
+                vec![],
+                serde_json::json!({
+                    "id": "555", "store_id": "42", "status": reservation_status,
+                    "expires_at": "2026-01-01T00:15:00Z", "created_at": "2026-01-01T00:00:00Z",
+                    "lines": [
+                        {"variant_id": "900", "location_id": "5", "quantity": 2},
+                        {"variant_id": "901", "location_id": "6", "quantity": 1}
+                    ]
+                }),
+            ),
+            ("POST", "stores/42/orders/quote") => {
+                if let Some((status, body)) = &quote_failure {
+                    return (*status, vec![], body.clone());
                 }
-                _ => (404, vec![], problem_body("not-found", 404, "no such route")),
-            },
-        )
+                let method = received
+                    .body
+                    .get("shipping_method_id")
+                    .and_then(|value| value.as_str())
+                    .map(|id| (id.to_owned(), "Standard delivery".to_owned(), 500_i64));
+                (200, vec![], quote_body(method))
+            }
+            _ => (404, vec![], problem_body("not-found", 404, "no such route")),
+        }
     }
 
     /// The service's quote reply: `v1:` terms without a method, `v2:` with
@@ -2925,10 +3004,23 @@ mod tests {
             keys,
             vec![
                 ("customers".to_owned(), "web-cust-key-1".to_owned()),
-                (
-                    "customers/700/addresses".to_owned(),
-                    "web-addr-key-1".to_owned()
-                ),
+                ("customers/700/addresses".to_owned(), {
+                    let call = upstream
+                        .calls_to("customers/700/addresses")
+                        .into_iter()
+                        .find(|call| call.method == "POST")
+                        .unwrap();
+                    let key = call
+                        .headers
+                        .iter()
+                        .find(|(name, _)| name == "idempotency-key")
+                        .unwrap()
+                        .1
+                        .clone();
+                    assert!(key.starts_with("web-addr-"));
+                    assert_eq!(key.len(), 73);
+                    key
+                }),
                 (
                     "stores/42/reservations".to_owned(),
                     "web-res-key-1".to_owned()
@@ -3104,6 +3196,136 @@ mod tests {
                 .is_empty(),
             "a refused quote must not release the hold"
         );
+    }
+
+    #[tokio::test]
+    async fn quote_retry_reuses_allocation_with_no_free_stock_and_corrected_address() {
+        for edit_address in [false, true] {
+            #[derive(Default)]
+            struct State {
+                reservation: Option<serde_json::Value>,
+                addresses: BTreeMap<String, serde_json::Value>,
+                quotes: usize,
+            }
+            let state = Mutex::new(State::default());
+            let Harness { upstream, scope } = harness(move |received| {
+                let mut state = state.lock().unwrap();
+                let key = || {
+                    received
+                        .headers
+                        .iter()
+                        .find(|(name, _)| name == "idempotency-key")
+                        .unwrap()
+                        .1
+                        .clone()
+                };
+                match (received.method.as_str(), received.path.as_str()) {
+                    ("GET", "stores/42/stock") if state.reservation.is_some() => {
+                        return (
+                            200,
+                            vec![],
+                            serde_json::json!({"items": [
+                            {"location_id": "5", "variant_id": "900", "on_hand": 2, "safety_stock": 0, "held": 2, "available": 0},
+                            {"location_id": "6", "variant_id": "901", "on_hand": 1, "safety_stock": 0, "held": 1, "available": 0}
+                        ], "next_after": null}),
+                        );
+                    }
+                    ("POST", "stores/42/reservations") => {
+                        if let Some(first) = &state.reservation {
+                            assert_eq!(
+                                first, &received.body,
+                                "retry must preserve locations and quantities"
+                            );
+                        } else {
+                            state.reservation = Some(received.body.clone());
+                        }
+                    }
+                    ("POST", "customers/700/addresses") => {
+                        if let Some(first) = state.addresses.get(&key())
+                            && first != &received.body
+                        {
+                            return (
+                                409,
+                                vec![],
+                                problem_body(
+                                    "ecommerce/idempotency-key-reused",
+                                    409,
+                                    "different address",
+                                ),
+                            );
+                        }
+                        state.addresses.insert(key(), received.body.clone());
+                        let id = if received.body["city"] == "Osaka" {
+                            "801"
+                        } else {
+                            "800"
+                        };
+                        return (201, vec![], serde_json::json!({"id": id}));
+                    }
+                    ("POST", "stores/42/orders/quote") => {
+                        state.quotes += 1;
+                        if state.quotes == 1 {
+                            return (
+                                422,
+                                vec![],
+                                problem_body(
+                                    "ecommerce/destination-not-served",
+                                    422,
+                                    "correct the destination",
+                                ),
+                            );
+                        }
+                        assert_eq!(
+                            received.body["shipping_address_id"],
+                            if edit_address { "801" } else { "800" }
+                        );
+                    }
+                    _ => {}
+                }
+                checkout_reply(received, &None, "held")
+            });
+            let mut request = request_checkout();
+            assert!(
+                scope
+                    .start_checkout("shop.acme.test", "retry", &request)
+                    .await
+                    .is_err()
+            );
+            let stock_reads = upstream.calls_to("stores/42/stock").len();
+            if edit_address {
+                request.address.city = "Osaka".to_owned();
+            }
+            scope
+                .start_checkout("shop.acme.test", "retry", &request)
+                .await
+                .unwrap();
+            // Repeat again to prove the corrected address key is stable too.
+            scope
+                .start_checkout("shop.acme.test", "retry", &request)
+                .await
+                .unwrap();
+            assert_eq!(upstream.calls_to("stores/42/stock").len(), stock_reads);
+            assert_eq!(upstream.calls_to("stores/42/reservations").len(), 3);
+            assert_eq!(upstream.calls_to("stores/42/orders/quote").len(), 3);
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_with_a_different_cart_requires_a_fresh_key() {
+        let Harness { upstream, scope } = checkout_harness();
+        let mut request = request_checkout();
+        scope
+            .start_checkout("shop.acme.test", "cart", &request)
+            .await
+            .unwrap();
+        request.lines[0].quantity += 1;
+        assert!(matches!(
+            scope
+                .start_checkout("shop.acme.test", "cart", &request)
+                .await,
+            Err(ShopperError::CheckoutInvalid { .. })
+        ));
+        assert_eq!(upstream.calls_to("stores/42/reservations").len(), 1);
     }
 
     #[tokio::test]
@@ -3907,6 +4129,7 @@ mod tests {
             Arc::new(FixedHosts(active_tenant())),
             Arc::new(Fixed(entitled())),
             FixedBinding::bound(Some(42)),
+            Arc::new(MemoryReservations::default()),
             Arc::new(NoKeySigner),
             upstream.clone(),
             3600,
@@ -3927,6 +4150,7 @@ mod tests {
             Arc::new(FixedHosts(active_tenant())),
             Arc::new(Fixed(entitled())),
             FixedBinding::bound(None),
+            Arc::new(MemoryReservations::default()),
             Arc::new(JsonSigner),
             upstream.clone(),
             3600,

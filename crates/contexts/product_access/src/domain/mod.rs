@@ -17,7 +17,8 @@ pub use forwarding::{ForwardRequest, ForwardResponse, ProductPath};
 pub use ports::{ProductUpstream, RolePermissions, TenantEntitlements, TokenSigner};
 pub use product::{CONNECTORS, ECOMMERCE, ISSUER, Product};
 pub use shopper::{
-    CHECKOUT_AUDIENCE, CREDENTIAL_AUDIENCE, CheckoutClaims, CheckoutHold, CheckoutLine,
-    DEFAULT_CREDENTIAL_TTL_SECS, HostTenants, PurchaseCredentialClaims, QuotedTerms, ShopperError,
-    ShopperTenant, StoreBindings, UpstreamProblem, WEB_CHECKOUT_PERMISSIONS, WEB_CHECKOUT_USER_ID,
+    CHECKOUT_AUDIENCE, CREDENTIAL_AUDIENCE, CheckoutAllocation, CheckoutClaims, CheckoutHold,
+    CheckoutLine, CheckoutReservations, DEFAULT_CREDENTIAL_TTL_SECS, HostTenants,
+    PurchaseCredentialClaims, QuotedTerms, ShopperError, ShopperTenant, StoreBindings,
+    UpstreamProblem, WEB_CHECKOUT_PERMISSIONS, WEB_CHECKOUT_USER_ID,
 };

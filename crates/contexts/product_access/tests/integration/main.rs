@@ -3,3 +3,5 @@
 
 mod privacy;
 mod proxy_http;
+
+mod checkout_reservations;

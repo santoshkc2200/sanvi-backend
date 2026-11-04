@@ -4081,6 +4081,7 @@ dependencies = [
  "sanvi-kernel",
  "sanvi-persistence",
  "sanvi-privacy",
+ "sanvi-testsupport",
  "serde",
  "serde_json",
  "sqlx",

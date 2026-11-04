@@ -845,3 +845,31 @@ mod tests {
         );
     }
 }
+
+/// One immutable allocation in a checkout intent. Kept before the upstream
+/// write so retries after timeouts use the same location and quantity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckoutAllocation {
+    pub variant_id: String,
+    pub location_id: String,
+    pub quantity: i64,
+}
+
+/// Durable reservation payloads, scoped by tenant, store and shopper key.
+#[async_trait]
+pub trait CheckoutReservations: Send + Sync {
+    async fn load(
+        &self,
+        tenant: TenantId,
+        store: i64,
+        key: &str,
+    ) -> Result<Option<Vec<CheckoutAllocation>>, ShopperError>;
+    /// First writer wins; returns the winning allocation even under a race.
+    async fn remember(
+        &self,
+        tenant: TenantId,
+        store: i64,
+        key: &str,
+        lines: Vec<CheckoutAllocation>,
+    ) -> Result<Vec<CheckoutAllocation>, ShopperError>;
+}
