@@ -44,6 +44,19 @@ payment contracts, not only locally minted tokens.
 - The product proxy forwards `Cache-Control` so the services' no-store
   reaches the browser on quote-derived and shipping-list answers.
 
+### API freeze exception (reviewed)
+
+The frozen v1 baseline recorded Option fields as plain `string`
+(`tenant_id` on roles, audit entries and privacy records, `actor_id`,
+`conversion_event_id`, `checkout_id`, `subject_id`). The code always
+returned `null` for them; the generated specs now say so
+(`type: [string, 'null']`, 33 response fields in `access`, `audit`,
+`payments` and `privacy`, from `e54f8d8`). No wire behaviour changed.
+`spec-freeze-check` reports exactly these and nothing else. Clients that
+already tolerated the `null` the API sent are unaffected; generated
+clients that typed the field as non-null must widen it. Merged under the
+`api-breaking-change-reviewed` exception.
+
 ### Not yet adopted
 
 - Provider-payment gateway adapter and the `sanvi.events.payments`
