@@ -14,8 +14,11 @@ creates the guest customer and address, picks reservation locations
 from live stock, holds the reservation and then prices the hold with
 the service's quote. The response is the only pricing a checkout page
 may show — the quoted totals, with the fingerprint bound inside the
-opaque `checkout` token that dies with the hold. A failed quote
-releases the fresh hold best-effort. Refusals: 409
+opaque `checkout` token that dies with the hold. A refused quote keeps
+the hold: retrying with the same `Idempotency-Key` resumes it (a
+different method or address re-quotes it) and an abandoned one
+expires. A key whose hold is already gone answers 409
+`ecommerce/checkout-expired`; restart with a fresh key. Refusals: 409
 `ecommerce/insufficient-stock` (with `lines` indexes; nothing is
 held), the quote's own typed 409/422 problems, 400 validation.
 
@@ -148,7 +151,7 @@ Operation: `public_ecommerce_checkout_release`
 checkout token names (abandonment path). Idempotent; accepts tokens
 whose hold already expired.
 
-Responses: 204, 400, 409, 502, 503
+Responses: 204, 400, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -599,6 +602,7 @@ Operation: `public_ecommerce_products`
 
 `GET /api/v1/public/ecommerce/products` — one page of active products
 with sellable variants, server-priced and server-availability-marked.
+Ordered by id DESC.
 
 Responses: 200, 404, 502, 503
 
@@ -936,14 +940,14 @@ Content-Type: application/json
 
 Operation: `ecommerce_list_customers`
 
-List the tenant's customers in every status, newest first.
+List the tenant's customers in every status, newest first. Ordered by id DESC.
 
 Responses: 200, 400, 403, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
 | `email` | query | no | type="string" |
-| `limit` | query | no | type="integer", format="int32", minimum=0 |
+| `limit` | query | no | type="integer", format="int32", minimum=1, maximum=100, default=50 |
 | `cursor` | query | no | type="string" |
 
 ### Response 200 (en-US / USD, cents)
@@ -1110,7 +1114,7 @@ Responses: 200, 403, 404, 502, 503
 
 Operation: `ecommerce_list_customer_addresses`
 
-List a customer's addresses, newest first: the active ones by default.
+List a customer's addresses, newest first: the active ones by default. Ordered by id DESC.
 
 Responses: 200, 400, 403, 404, 502, 503
 
@@ -1118,7 +1122,7 @@ Responses: 200, 400, 403, 404, 502, 503
 | --- | --- | --- | --- |
 | `customer_id` | path | yes | type="string" |
 | `status` | query | no | type="string" |
-| `limit` | query | no | type="integer", format="int32", minimum=0 |
+| `limit` | query | no | type="integer", format="int32", minimum=1, maximum=100, default=50 |
 | `cursor` | query | no | type="string" |
 
 ### Response 200 (en-US / USD, cents)
@@ -1473,7 +1477,7 @@ Responses: 200, 400, 403, 404, 502, 503
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
 | `customer_id` | path | yes | type="string" |
-| `limit` | query | no | type="integer", format="int32", minimum=0 |
+| `limit` | query | no | type="integer", format="int32", minimum=1, maximum=100, default=50 |
 | `cursor` | query | no | type="string" |
 
 ### Response 200 (en-US / USD, cents)
@@ -1800,13 +1804,13 @@ Content-Type: application/json
 
 Operation: `ecommerce_list_stores`
 
-List the tenant's stores in every status, newest first.
+List the tenant's stores in every status, newest first. Ordered by id DESC.
 
 Responses: 200, 400, 403, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
-| `limit` | query | no | type="integer", format="int32", minimum=0 |
+| `limit` | query | no | type="integer", format="int32", minimum=1, maximum=100, default=50 |
 | `cursor` | query | no | type="string" |
 
 ### Response 200 (en-US / USD, cents)
@@ -2083,14 +2087,14 @@ Content-Type: application/json
 
 Operation: `ecommerce_list_locations`
 
-List an active store's stock locations.
+List an active store's stock locations. Ordered by id DESC.
 
 Responses: 200, 400, 403, 404, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
 | `store_id` | path | yes | type="string" |
-| `limit` | query | no | type="integer", format="int32", minimum=0 |
+| `limit` | query | no | type="integer", format="int32", minimum=1, maximum=100, default=50 |
 | `after` | query | no | type="string" |
 
 ### Response 200 (en-US / USD, cents)
@@ -2129,7 +2133,7 @@ Responses: 200, 400, 403, 404, 502, 503
 
 Operation: `ecommerce_list_orders`
 
-List an active store's orders, newest first.
+List an active store's orders, newest first. Ordered by id DESC.
 
 Responses: 200, 400, 403, 404, 502, 503
 
@@ -2138,7 +2142,7 @@ Responses: 200, 400, 403, 404, 502, 503
 | `store_id` | path | yes | type="string" |
 | `status` | query | no | type="string" |
 | `customer_id` | query | no | type="string" |
-| `limit` | query | no | type="integer", format="int32", minimum=0 |
+| `limit` | query | no | type="integer", format="int32", minimum=1, maximum=100, default=50 |
 | `cursor` | query | no | type="string" |
 
 ### Response 200 (en-US / USD, cents)
@@ -2974,7 +2978,7 @@ Content-Type: application/json
 
 Operation: `ecommerce_list_fulfillments`
 
-List an order's fulfillments, newest first.
+List an order's fulfillments, newest first. Ordered by id DESC.
 
 Responses: 200, 403, 404, 502, 503
 
@@ -2982,7 +2986,7 @@ Responses: 200, 403, 404, 502, 503
 | --- | --- | --- | --- |
 | `store_id` | path | yes | type="string" |
 | `order_id` | path | yes | type="string", format="snowflake-id" |
-| `limit` | query | no | type="integer", format="int32", minimum=0 |
+| `limit` | query | no | type="integer", format="int32", minimum=1, maximum=100, default=50 |
 | `cursor` | query | no | type="string" |
 
 ### Response 200 (en-US / USD, cents)
@@ -3771,7 +3775,7 @@ Content-Type: application/json
 
 Operation: `ecommerce_list_returns`
 
-List an order's returns, newest first.
+List an order's returns, newest first. Ordered by id DESC.
 
 Responses: 200, 403, 404, 502, 503
 
@@ -3779,7 +3783,7 @@ Responses: 200, 403, 404, 502, 503
 | --- | --- | --- | --- |
 | `store_id` | path | yes | type="string" |
 | `order_id` | path | yes | type="string", format="snowflake-id" |
-| `limit` | query | no | type="integer", format="int32", minimum=0 |
+| `limit` | query | no | type="integer", format="int32", minimum=1, maximum=100, default=50 |
 | `cursor` | query | no | type="string" |
 
 ### Response 200 (en-US / USD, cents)
@@ -3986,14 +3990,14 @@ Responses: 200, 403, 404, 502, 503
 
 Operation: `ecommerce_list_products`
 
-List an active store's products, newest first.
+List an active store's products, newest first. Ordered by id DESC.
 
 Responses: 200, 400, 403, 404, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
 | `store_id` | path | yes | type="string" |
-| `limit` | query | no | type="integer", format="int32", minimum=0 |
+| `limit` | query | no | type="integer", format="int32", minimum=1, maximum=100, default=50 |
 | `cursor` | query | no | type="string" |
 
 ### Response 200 (en-US / USD, cents)
@@ -4431,14 +4435,14 @@ Content-Type: application/json
 
 Operation: `ecommerce_list_shipping_methods`
 
-List shipping methods of a store.
+List shipping methods of a store. Ordered by id DESC.
 
 Responses: 200, 400, 403, 404, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
 | `store_id` | path | yes | type="string" |
-| `limit` | query | no | type="integer", format="int32", minimum=0 |
+| `limit` | query | no | type="integer", format="int32", minimum=1, maximum=100, default=50 |
 | `cursor` | query | no | type="string" |
 | `status` | query | no | type="string" |
 
@@ -4490,7 +4494,7 @@ Responses: 200, 400, 403, 404, 502, 503
 
 Operation: `ecommerce_list_stock`
 
-List stock levels at a location.
+List stock levels at a location. Ordered by variant_id DESC.
 
 Responses: 200, 400, 403, 404, 502, 503
 
@@ -4498,7 +4502,7 @@ Responses: 200, 400, 403, 404, 502, 503
 | --- | --- | --- | --- |
 | `store_id` | path | yes | type="string" |
 | `location_id` | query | yes | type="string" |
-| `limit` | query | no | type="integer", format="int32", minimum=0 |
+| `limit` | query | no | type="integer", format="int32", minimum=1, maximum=100, default=50 |
 | `after` | query | no | type="string" |
 
 ### Response 200 (en-US / USD, cents)

@@ -14,6 +14,7 @@ use sanvi_product_access::adapters::http::ProductAccessState;
 use sanvi_product_access::adapters::signer::DisabledSigner;
 use sanvi_product_access::adapters::{
     Ed25519Signer, HostTenantShopperAdapter, HttpProductUpstream, SqlxStoreBindings,
+    StoredCheckoutReservations,
 };
 use sanvi_product_access::application::{ProxyImportRequest, ProxyRequest, ShopperScope};
 use sanvi_product_access::domain::{
@@ -118,6 +119,9 @@ pub fn build_product_access_state(
         Arc::new(HostTenantShopperAdapter::new(host_tenants)),
         entitlements.clone(),
         Arc::new(SqlxStoreBindings::new(access.tx_manager.clone())),
+        Arc::new(StoredCheckoutReservations::new(
+            sanvi_persistence::IdempotencyStore::new(access.tx_manager.pool().clone()),
+        )),
         signer.clone(),
         upstream.clone(),
         config.purchase_credential_ttl_secs,

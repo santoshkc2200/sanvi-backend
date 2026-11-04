@@ -239,7 +239,7 @@ impl ShopperError {
             Self::CredentialExpired => Some("ecommerce/credential-expired"),
             Self::CheckoutInvalid { .. } => Some("bad-request"),
             Self::CheckoutExpired => Some("ecommerce/checkout-expired"),
-            Self::CheckoutRefreshRequired => Some("checkout-refresh-required"),
+            Self::CheckoutRefreshRequired => Some("ecommerce/checkout-refresh-required"),
             Self::PriceChanged => Some("ecommerce/price-changed"),
             Self::Upstream(_) | Self::Unavailable(_) | Self::BadGateway(_) | Self::Storage(_) => {
                 None
@@ -359,6 +359,9 @@ pub struct CheckoutClaims {
 struct ClaimsShape {
     iss: String,
     aud: String,
+    sub: String,
+    tenant_id: String,
+    store_id: String,
     #[serde(default)]
     pricing_fingerprint: Option<String>,
     #[serde(default)]
@@ -414,13 +417,7 @@ impl CheckoutClaims {
     /// [`ShopperError::CheckoutRefreshRequired`]: it must be re-approved,
     /// never silently accepted.
     pub fn from_verified(value: serde_json::Value) -> Result<Self, ShopperError> {
-        let invalid = || ShopperError::CheckoutInvalid {
-            detail: "the checkout reference is not valid".to_owned(),
-        };
-        let shape: ClaimsShape = serde_json::from_value(value.clone()).map_err(|_| invalid())?;
-        if shape.aud != CHECKOUT_AUDIENCE || shape.iss != ISSUER {
-            return Err(invalid());
-        }
+        let shape = ClaimsShape::parse(&value)?;
         // Legacy token: right identity, no quote approval inside.
         if shape.pricing_fingerprint.is_none() {
             return Err(ShopperError::CheckoutRefreshRequired);
@@ -431,10 +428,55 @@ impl CheckoutClaims {
             || shape.tax_minor.is_none()
             || shape.total_minor.is_none()
         {
-            return Err(invalid());
+            return Err(ShopperError::checkout_invalid());
         }
-        let claims: Self = serde_json::from_value(value).map_err(|_| invalid())?;
+        let claims: Self =
+            serde_json::from_value(value).map_err(|_| ShopperError::checkout_invalid())?;
         Ok(claims)
+    }
+}
+
+impl ShopperError {
+    /// A checkout reference that is not ours, not ours for this store, or
+    /// not well formed. Deliberately says no more.
+    pub(crate) fn checkout_invalid() -> Self {
+        Self::CheckoutInvalid {
+            detail: "the checkout reference is not valid".to_owned(),
+        }
+    }
+}
+
+impl ClaimsShape {
+    /// Identity only: a well-formed checkout token for this issuer and
+    /// audience, whatever generation of claims it carries.
+    fn parse(value: &serde_json::Value) -> Result<Self, ShopperError> {
+        let shape: Self =
+            serde_json::from_value(value.clone()).map_err(|_| ShopperError::checkout_invalid())?;
+        if shape.aud != CHECKOUT_AUDIENCE || shape.iss != ISSUER {
+            return Err(ShopperError::checkout_invalid());
+        }
+        Ok(shape)
+    }
+}
+
+/// The reservation a checkout token holds. Releasing it needs no quoted
+/// terms, so a legacy (pre-quote) token can still free its stock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckoutHold {
+    pub reservation_id: String,
+    pub tenant_id: String,
+    pub store_id: String,
+}
+
+impl CheckoutHold {
+    /// Interprets a signature-verified payload of any claims generation.
+    pub fn from_verified(value: serde_json::Value) -> Result<Self, ShopperError> {
+        let shape = ClaimsShape::parse(&value)?;
+        Ok(Self {
+            reservation_id: shape.sub,
+            tenant_id: shape.tenant_id,
+            store_id: shape.store_id,
+        })
     }
 }
 
@@ -622,6 +664,31 @@ mod tests {
     }
 
     #[test]
+    fn legacy_token_still_names_its_hold_for_release() {
+        let legacy = serde_json::json!({
+            "iss": ISSUER,
+            "aud": CHECKOUT_AUDIENCE,
+            "sub": "555",
+            "tenant_id": "1001",
+            "store_id": "42",
+            "jti": "018f0000000070008000000000000000",
+        });
+        let hold = CheckoutHold::from_verified(legacy).unwrap();
+        assert_eq!(hold.reservation_id, "555");
+        assert_eq!(hold.tenant_id, "1001");
+        assert_eq!(hold.store_id, "42");
+
+        let foreign = serde_json::json!({
+            "iss": ISSUER, "aud": "someone-else",
+            "sub": "555", "tenant_id": "1001", "store_id": "42",
+        });
+        assert!(matches!(
+            CheckoutHold::from_verified(foreign),
+            Err(ShopperError::CheckoutInvalid { .. })
+        ));
+    }
+
+    #[test]
     fn wrong_audience_still_invalid() {
         let claims = CheckoutClaims::new(
             "555".to_owned(),
@@ -777,4 +844,32 @@ mod tests {
             ShopperError::StoreUnavailable
         );
     }
+}
+
+/// One immutable allocation in a checkout intent. Kept before the upstream
+/// write so retries after timeouts use the same location and quantity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckoutAllocation {
+    pub variant_id: String,
+    pub location_id: String,
+    pub quantity: i64,
+}
+
+/// Durable reservation payloads, scoped by tenant, store and shopper key.
+#[async_trait]
+pub trait CheckoutReservations: Send + Sync {
+    async fn load(
+        &self,
+        tenant: TenantId,
+        store: i64,
+        key: &str,
+    ) -> Result<Option<Vec<CheckoutAllocation>>, ShopperError>;
+    /// First writer wins; returns the winning allocation even under a race.
+    async fn remember(
+        &self,
+        tenant: TenantId,
+        store: i64,
+        key: &str,
+        lines: Vec<CheckoutAllocation>,
+    ) -> Result<Vec<CheckoutAllocation>, ShopperError>;
 }

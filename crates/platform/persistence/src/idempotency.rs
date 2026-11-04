@@ -61,7 +61,7 @@ impl IdempotencyStore {
         scope: &str,
         ttl: Duration,
     ) -> Result<Option<IdempotencyHit>> {
-        if let Some(hit) = self.stored(key, scope).await? {
+        if let Some(hit) = self.lookup(key, scope).await? {
             return Ok(Some(hit));
         }
 
@@ -86,7 +86,7 @@ impl IdempotencyStore {
         }
 
         // We lost the race: serve the winner's row.
-        self.stored(key, scope).await
+        self.lookup(key, scope).await
     }
 
     /// Record the final response for `key` in `scope`.
@@ -139,7 +139,8 @@ impl IdempotencyStore {
         Ok(deleted)
     }
 
-    async fn stored(&self, key: &str, scope: &str) -> Result<Option<IdempotencyHit>> {
+    /// Read a live claim without creating one.
+    pub async fn lookup(&self, key: &str, scope: &str) -> Result<Option<IdempotencyHit>> {
         let row = sqlx::query_as!(
             IdempotencyRow,
             "SELECT response, status FROM platform.idempotency_keys

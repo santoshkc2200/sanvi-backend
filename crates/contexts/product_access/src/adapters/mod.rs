@@ -10,3 +10,6 @@ pub use privacy_provider::ProductAccessPrivacyProvider;
 pub use signer::Ed25519Signer;
 pub use store_bindings::SqlxStoreBindings;
 pub use upstream::HttpProductUpstream;
+
+pub mod checkout_reservations;
+pub use checkout_reservations::StoredCheckoutReservations;

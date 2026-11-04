@@ -4,6 +4,68 @@ All notable changes to Sanvi backend. Generated from Conventional Commits;
 phase sections group the slices a release ships. Versions follow the shared
 roadmap's phase map (see `docs/roadmap.md`).
 
+## Unreleased — Ecommerce platform adoption (phase 15 follow-on)
+
+Shopper checkout and staff order flows now work against
+ecommerce-service's quote, shipping, discount, fulfillment, return and
+payment contracts, not only locally minted tokens.
+
+### Added
+
+- Staff permissions `ecommerce.order.discount`, `ecommerce.fulfillment.record`,
+  `ecommerce.return.record`, `ecommerce.payment.record` and
+  `ecommerce.payment.refund` (owner and admin; never members, never the
+  web-checkout delegation).
+- `GET /api/v1/public/ecommerce/shipping-methods` — the published store's
+  active methods for the checkout picker; the service-side `status`
+  filter is hardcoded to active and the answer is always no-store.
+- The contract mirror publishes the checkout quote, shipping methods,
+  guarded placement (`expected_pricing_fingerprint`, `DiscountRequest`)
+  and the order's fulfillment/return/payment/refund recording, with each
+  operation's 403 text naming the staff permission.
+
+### Changed
+
+- Checkout start prices the hold with the service's quote instead of
+  catalog math: the opaque fingerprint and complete totals are signed
+  into the checkout claims (legacy pre-quote tokens are refused with 409
+  `ecommerce/checkout-refresh-required` at placement).
+- Placement is guarded: it sends the claims' fingerprint and shipping
+  method, maps the service's `ecommerce/checkout-price-changed` to the
+  shopper's re-approval state with the hold intact, and the
+  post-placement price comparison and compensating cancel are retired.
+  Ambiguous-timeout retries re-present the original request and key.
+- A refused quote keeps the checkout's hold so a retry with the same key
+  resumes it instead of replaying a released reservation; a key whose hold
+  is already gone answers 409 `ecommerce/checkout-expired`. Legacy
+  pre-quote tokens can still release their hold, and a store with more
+  shipping methods than the checkout can list fails instead of showing a
+  truncated picker.
+- Checkout retries persist the original stock allocation before reserving,
+  so their own hold cannot fail the free-stock check or change locations.
+  Address corrections use a content-specific creation key while retaining
+  the reservation key; cart edits require a new checkout key.
+- The product proxy forwards `Cache-Control` so the services' no-store
+  reaches the browser on quote-derived and shipping-list answers.
+
+### API freeze exception (reviewed)
+
+The frozen v1 baseline recorded Option fields as plain `string`
+(`tenant_id` on roles, audit entries and privacy records, `actor_id`,
+`conversion_event_id`, `checkout_id`, `subject_id`). The code always
+returned `null` for them; the generated specs now say so
+(`type: [string, 'null']`, 33 response fields in `access`, `audit`,
+`payments` and `privacy`, from `e54f8d8`). No wire behaviour changed.
+`spec-freeze-check` reports exactly these and nothing else. Clients that
+already tolerated the `null` the API sent are unaffected; generated
+clients that typed the field as non-null must widen it. Merged under the
+`api-breaking-change-reviewed` exception.
+
+### Not yet adopted
+
+- Provider-payment gateway adapter and the `sanvi.events.payments`
+  stream (separate plan); storefront and admin UI (frontend repo).
+
 ## 0.10.0 — Tenant Payment Providers (phases 09)
 
 Merchant money: tenants connect Stripe via Connect (Accounts v2, embedded

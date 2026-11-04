@@ -173,6 +173,15 @@ fn shared_postgres_request() -> testcontainers::ContainerRequest<Postgres> {
                     // the gate fails loudly naming this when it is missing.
                     "-c",
                     "shared_preload_libraries=pg_stat_statements",
+                    // The perf gate diffs before/after snapshots of these
+                    // entries; the 5000-statement default starts evicting
+                    // under the full suite's load, and an evicted entry
+                    // loses its call history — the window then under-counts
+                    // (a use case's own query delta collapses to 0). A cap
+                    // an order of magnitude above the suite's statement
+                    // volume keeps every entry alive for the whole run.
+                    "-c",
+                    "pg_stat_statements.max=50000",
                 ])
 }
 

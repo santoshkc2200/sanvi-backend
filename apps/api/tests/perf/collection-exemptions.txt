@@ -83,3 +83,11 @@ search_domains | per-query availability document; the embedded array is the TLD 
 ready | fixed startup-configured dependency states for the readiness probe, never tenant rows or client-controlled cardinality
 get_payment_connection | Singleton provider connection; embedded requirements are its bounded provider-defined checklist, not a tenant collection.
 get_current_payment_connection | The caller's own singleton provider connection; embedded requirements are its bounded provider-defined checklist, not a tenant collection.
+public_ecommerce_order_get | one credential-scoped order read; the lines array is the order's own immutable snapshot, not a pageable collection
+public_ecommerce_product | one product read; the variants array is the product's own sellable variants, not a pageable collection
+public_ecommerce_shipping_methods | the store's active shipping methods for the checkout picker; the orchestration pages the service at a fixed internal ceiling and the client cannot size the page
+ecommerce_get_order | one order read; the lines array is the order's own immutable snapshot, not a pageable collection
+ecommerce_get_fulfillment | one fulfillment read; the lines array is the handover's own immutable record, not a pageable collection
+ecommerce_list_payments | one order's payments, oldest first; the service caps an order at 100 payments and never pages the list
+ecommerce_get_return | one return read; the lines array is the receipt's own immutable record, not a pageable collection
+ecommerce_get_product | one product read; the variants array is the product's own variants, not a pageable collection

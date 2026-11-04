@@ -2304,7 +2304,7 @@ paths:
     get:
       tags:
       - product_access
-      summary: List the tenant's customers in every status, newest first.
+      summary: List the tenant's customers in every status, newest first. Ordered by id DESC.
       operationId: ecommerce_list_customers
       parameters:
       - name: email
@@ -2320,7 +2320,9 @@ paths:
         schema:
           type: integer
           format: int32
-          minimum: 0
+          minimum: 1
+          maximum: 100
+          default: 50
       - name: cursor
         in: query
         description: '`next_cursor` from the previous page.'
@@ -2484,7 +2486,8 @@ paths:
     get:
       tags:
       - product_access
-      summary: 'List a customer''s addresses, newest first: the active ones by default.'
+      summary: 'List a customer''s addresses, newest first: the active ones by default.
+        Ordered by id DESC.'
       operationId: ecommerce_list_customer_addresses
       parameters:
       - name: customer_id
@@ -2506,7 +2509,9 @@ paths:
         schema:
           type: integer
           format: int32
-          minimum: 0
+          minimum: 1
+          maximum: 100
+          default: 50
       - name: cursor
         in: query
         description: '`next_cursor` from the previous page.'
@@ -2828,6 +2833,7 @@ paths:
         Returns the record, every address in every status, and their orders in every
         store of the tenant, archived stores included, a page at a time. An erased
         customer exports with null contact and address fields and their orders.
+        Ordered by id ASC.
       operationId: ecommerce_export_customer
       parameters:
       - name: customer_id
@@ -2843,7 +2849,9 @@ paths:
         schema:
           type: integer
           format: int32
-          minimum: 0
+          minimum: 1
+          maximum: 100
+          default: 50
       - name: cursor
         in: query
         description: '`next_cursor` from the previous page.'
@@ -2965,7 +2973,7 @@ paths:
     get:
       tags:
       - product_access
-      summary: List the tenant's stores in every status, newest first.
+      summary: List the tenant's stores in every status, newest first. Ordered by id DESC.
       operationId: ecommerce_list_stores
       parameters:
       - name: limit
@@ -2975,7 +2983,9 @@ paths:
         schema:
           type: integer
           format: int32
-          minimum: 0
+          minimum: 1
+          maximum: 100
+          default: 50
       - name: cursor
         in: query
         description: '`next_cursor` from the previous page.'
@@ -3218,7 +3228,7 @@ paths:
     get:
       tags:
       - product_access
-      summary: List an active store's stock locations.
+      summary: List an active store's stock locations. Ordered by id DESC.
       operationId: ecommerce_list_locations
       parameters:
       - name: store_id
@@ -3234,7 +3244,9 @@ paths:
         schema:
           type: integer
           format: int32
-          minimum: 0
+          minimum: 1
+          maximum: 100
+          default: 50
       - name: after
         in: query
         description: Pass location id to fetch items with lower ids.
@@ -3286,7 +3298,7 @@ paths:
     get:
       tags:
       - product_access
-      summary: List an active store's orders, newest first.
+      summary: List an active store's orders, newest first. Ordered by id DESC.
       operationId: ecommerce_list_orders
       parameters:
       - name: store_id
@@ -3314,7 +3326,9 @@ paths:
         schema:
           type: integer
           format: int32
-          minimum: 0
+          minimum: 1
+          maximum: 100
+          default: 50
       - name: cursor
         in: query
         description: '`next_cursor` from the previous page.'
@@ -3601,7 +3615,7 @@ paths:
     get:
       tags:
       - product_access
-      summary: List an order's fulfillments, newest first.
+      summary: List an order's fulfillments, newest first. Ordered by id DESC.
       operationId: ecommerce_list_fulfillments
       parameters:
       - name: store_id
@@ -3623,7 +3637,9 @@ paths:
         schema:
           type: integer
           format: int32
-          minimum: 0
+          minimum: 1
+          maximum: 100
+          default: 50
       - name: cursor
         in: query
         description: '`next_cursor` from the previous page.'
@@ -4173,7 +4189,7 @@ paths:
     get:
       tags:
       - product_access
-      summary: List an order's returns, newest first.
+      summary: List an order's returns, newest first. Ordered by id DESC.
       operationId: ecommerce_list_returns
       parameters:
       - name: store_id
@@ -4195,7 +4211,9 @@ paths:
         schema:
           type: integer
           format: int32
-          minimum: 0
+          minimum: 1
+          maximum: 100
+          default: 50
       - name: cursor
         in: query
         description: '`next_cursor` from the previous page.'
@@ -4400,7 +4418,7 @@ paths:
     get:
       tags:
       - product_access
-      summary: List an active store's products, newest first.
+      summary: List an active store's products, newest first. Ordered by id DESC.
       operationId: ecommerce_list_products
       parameters:
       - name: store_id
@@ -4416,7 +4434,9 @@ paths:
         schema:
           type: integer
           format: int32
-          minimum: 0
+          minimum: 1
+          maximum: 100
+          default: 50
       - name: cursor
         in: query
         description: '`next_cursor` from the previous page.'
@@ -4689,7 +4709,7 @@ paths:
     get:
       tags:
       - product_access
-      summary: List shipping methods of a store.
+      summary: List shipping methods of a store. Ordered by id DESC.
       operationId: ecommerce_list_shipping_methods
       parameters:
       - name: store_id
@@ -4705,7 +4725,9 @@ paths:
         schema:
           type: integer
           format: int32
-          minimum: 0
+          minimum: 1
+          maximum: 100
+          default: 50
       - name: cursor
         in: query
         description: Pass as cursor for the next page.
@@ -4768,7 +4790,7 @@ paths:
     get:
       tags:
       - product_access
-      summary: List stock levels at a location.
+      summary: List stock levels at a location. Ordered by variant_id DESC.
       operationId: ecommerce_list_stock
       parameters:
       - name: store_id
@@ -4790,7 +4812,9 @@ paths:
         schema:
           type: integer
           format: int32
-          minimum: 0
+          minimum: 1
+          maximum: 100
+          default: 50
       - name: after
         in: query
         description: Variant id cursor for subsequent pages.

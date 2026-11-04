@@ -2260,6 +2260,9 @@ components:
       - quantity
       type: object
     ShopperOrderConfirmationView:
+      description: |-
+        No `Debug`: the payload carries the purchase credential — a bearer
+        secret that must never ride into a log line via formatting.
       properties:
         credential:
           description: |-
@@ -2926,7 +2929,7 @@ paths:
     post:
       operationId: public_ecommerce_checkout_start
       parameters:
-      - description: One key per checkout intent; reused across retries of the same intent, re-minted after a payload edit
+      - description: One key per cart and contact; reused across retries and shipping method or address corrections, re-minted after cart or contact edits
         in: header
         name: Idempotency-Key
         required: true
@@ -2994,8 +2997,11 @@ paths:
         from live stock, holds the reservation and then prices the hold with
         the service's quote. The response is the only pricing a checkout page
         may show — the quoted totals, with the fingerprint bound inside the
-        opaque `checkout` token that dies with the hold. A failed quote
-        releases the fresh hold best-effort. Refusals: 409
+        opaque `checkout` token that dies with the hold. A refused quote keeps
+        the hold: retrying with the same `Idempotency-Key` resumes it (a
+        different method or address re-quotes it) and an abandoned one
+        expires. A key whose hold is already gone answers 409
+        `ecommerce/checkout-expired`; restart with a fresh key. Refusals: 409
         `ecommerce/insufficient-stock` (with `lines` indexes; nothing is
         held), the quote's own typed 409/422 problems, 400 validation.
       tags:
@@ -3025,12 +3031,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: The checkout reference is not valid
-        '409':
-          content:
-            application/problem+json:
-              schema:
-                $ref: '#/components/schemas/ProblemDetail'
-          description: 'Checkout terms need re-approval (`checkout-refresh-required`: a legacy pre-quote token cannot be released; its hold expires)'
         '502':
           content:
             application/problem+json:
@@ -3095,7 +3095,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: 'Checkout expired, checkout terms need re-approval (`checkout-refresh-required`: a legacy pre-quote token), prices changed, reservation expired or already ordered (typed problem)'
+          description: 'Checkout expired, checkout terms need re-approval (`ecommerce/checkout-refresh-required`: a legacy pre-quote token), prices changed, reservation expired or already ordered (typed problem)'
         '422':
           content:
             application/problem+json:
@@ -3491,6 +3491,7 @@ paths:
       summary: |-
         `GET /api/v1/public/ecommerce/products` — one page of active products
         with sellable variants, server-priced and server-availability-marked.
+        Ordered by id DESC.
       tags:
       - product_access
   /api/v1/public/ecommerce/products/{product_id}:
@@ -3899,8 +3900,10 @@ paths:
         name: limit
         required: false
         schema:
+          default: 50
           format: int32
-          minimum: 0
+          maximum: 100
+          minimum: 1
           type: integer
       - description: '`next_cursor` from the previous page.'
         in: query
@@ -3942,7 +3945,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: ecommerce-service is not configured or unreachable, or its database is unavailable
-      summary: List the tenant's customers in every status, newest first.
+      summary: List the tenant's customers in every status, newest first. Ordered by id DESC.
       tags:
       - product_access
     post:
@@ -4085,8 +4088,10 @@ paths:
         name: limit
         required: false
         schema:
+          default: 50
           format: int32
-          minimum: 0
+          maximum: 100
+          minimum: 1
           type: integer
       - description: '`next_cursor` from the previous page.'
         in: query
@@ -4134,7 +4139,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: ecommerce-service is not configured or unreachable, or its database is unavailable
-      summary: 'List a customer''s addresses, newest first: the active ones by default.'
+      summary: 'List a customer''s addresses, newest first: the active ones by default. Ordered by id DESC.'
       tags:
       - product_access
     post:
@@ -4409,6 +4414,7 @@ paths:
         Returns the record, every address in every status, and their orders in every
         store of the tenant, archived stores included, a page at a time. An erased
         customer exports with null contact and address fields and their orders.
+        Ordered by id ASC.
       operationId: ecommerce_export_customer
       parameters:
       - description: A customer of the caller's tenant (decimal Snowflake)
@@ -4422,8 +4428,10 @@ paths:
         name: limit
         required: false
         schema:
+          default: 50
           format: int32
-          minimum: 0
+          maximum: 100
+          minimum: 1
           type: integer
       - description: '`next_cursor` from the previous page.'
         in: query
@@ -4554,8 +4562,10 @@ paths:
         name: limit
         required: false
         schema:
+          default: 50
           format: int32
-          minimum: 0
+          maximum: 100
+          minimum: 1
           type: integer
       - description: '`next_cursor` from the previous page.'
         in: query
@@ -4598,7 +4608,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: ecommerce-service is not configured or unreachable, or its database is unavailable
-      summary: List the tenant's stores in every status, newest first.
+      summary: List the tenant's stores in every status, newest first. Ordered by id DESC.
       tags:
       - product_access
     post:
@@ -4813,8 +4823,10 @@ paths:
         name: limit
         required: false
         schema:
+          default: 50
           format: int32
-          minimum: 0
+          maximum: 100
+          minimum: 1
           type: integer
       - description: Pass location id to fetch items with lower ids.
         in: query
@@ -4863,7 +4875,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: ecommerce-service is not configured or unreachable, or its database is unavailable
-      summary: List an active store's stock locations.
+      summary: List an active store's stock locations. Ordered by id DESC.
       tags:
       - product_access
   /api/v1/tenant/ecommerce/stores/{store_id}/orders:
@@ -4893,8 +4905,10 @@ paths:
         name: limit
         required: false
         schema:
+          default: 50
           format: int32
-          minimum: 0
+          maximum: 100
+          minimum: 1
           type: integer
       - description: '`next_cursor` from the previous page.'
         in: query
@@ -4942,7 +4956,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: ecommerce-service is not configured or unreachable, or its database is unavailable
-      summary: List an active store's orders, newest first.
+      summary: List an active store's orders, newest first. Ordered by id DESC.
       tags:
       - product_access
     post:
@@ -5214,8 +5228,10 @@ paths:
         name: limit
         required: false
         schema:
+          default: 50
           format: int32
-          minimum: 0
+          maximum: 100
+          minimum: 1
           type: integer
       - description: '`next_cursor` from the previous page.'
         in: query
@@ -5257,7 +5273,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: ecommerce-service is not configured or unreachable, or its database is unavailable
-      summary: List an order's fulfillments, newest first.
+      summary: List an order's fulfillments, newest first. Ordered by id DESC.
       tags:
       - product_access
     post:
@@ -5814,8 +5830,10 @@ paths:
         name: limit
         required: false
         schema:
+          default: 50
           format: int32
-          minimum: 0
+          maximum: 100
+          minimum: 1
           type: integer
       - description: '`next_cursor` from the previous page.'
         in: query
@@ -5857,7 +5875,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: ecommerce-service is not configured or unreachable, or its database is unavailable
-      summary: List an order's returns, newest first.
+      summary: List an order's returns, newest first. Ordered by id DESC.
       tags:
       - product_access
     post:
@@ -6043,8 +6061,10 @@ paths:
         name: limit
         required: false
         schema:
+          default: 50
           format: int32
-          minimum: 0
+          maximum: 100
+          minimum: 1
           type: integer
       - description: '`next_cursor` from the previous page.'
         in: query
@@ -6093,7 +6113,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: ecommerce-service is not configured or unreachable, or its database is unavailable
-      summary: List an active store's products, newest first.
+      summary: List an active store's products, newest first. Ordered by id DESC.
       tags:
       - product_access
     post:
@@ -6332,8 +6352,10 @@ paths:
         name: limit
         required: false
         schema:
+          default: 50
           format: int32
-          minimum: 0
+          maximum: 100
+          minimum: 1
           type: integer
       - description: Pass as cursor for the next page.
         in: query
@@ -6393,7 +6415,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: ecommerce-service is not configured or unreachable, or its database is unavailable
-      summary: List shipping methods of a store.
+      summary: List shipping methods of a store. Ordered by id DESC.
       tags:
       - product_access
   /api/v1/tenant/ecommerce/stores/{store_id}/stock:
@@ -6417,8 +6439,10 @@ paths:
         name: limit
         required: false
         schema:
+          default: 50
           format: int32
-          minimum: 0
+          maximum: 100
+          minimum: 1
           type: integer
       - description: Variant id cursor for subsequent pages.
         in: query
@@ -6467,7 +6491,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: ecommerce-service is not configured or unreachable, or its database is unavailable
-      summary: List stock levels at a location.
+      summary: List stock levels at a location. Ordered by variant_id DESC.
       tags:
       - product_access
   /api/v1/tenant/ecommerce/stores/{store_id}/tax:

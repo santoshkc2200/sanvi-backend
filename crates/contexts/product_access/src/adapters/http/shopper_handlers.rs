@@ -171,7 +171,7 @@ pub fn shopper_problem(error: ShopperError) -> HttpResponse {
                 "ecommerce/credential-invalid" => "Order Access Denied",
                 "ecommerce/credential-expired" => "Order Link Expired",
                 "ecommerce/checkout-expired" => "Checkout Expired",
-                "checkout-refresh-required" => "Checkout Refresh Required",
+                "ecommerce/checkout-refresh-required" => "Checkout Refresh Required",
                 "ecommerce/price-changed" => "Prices Changed",
                 "bad-request" => "Bad Request",
                 "not-found" => "Not Found",
@@ -238,6 +238,7 @@ pub async fn get_public_store(
 
 /// `GET /api/v1/public/ecommerce/products` — one page of active products
 /// with sellable variants, server-priced and server-availability-marked.
+/// Ordered by id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/public/ecommerce/products",
@@ -336,8 +337,11 @@ pub async fn get_public_shipping_methods(
 /// from live stock, holds the reservation and then prices the hold with
 /// the service's quote. The response is the only pricing a checkout page
 /// may show — the quoted totals, with the fingerprint bound inside the
-/// opaque `checkout` token that dies with the hold. A failed quote
-/// releases the fresh hold best-effort. Refusals: 409
+/// opaque `checkout` token that dies with the hold. A refused quote keeps
+/// the hold: retrying with the same `Idempotency-Key` resumes it (a
+/// different method or address re-quotes it) and an abandoned one
+/// expires. A key whose hold is already gone answers 409
+/// `ecommerce/checkout-expired`; restart with a fresh key. Refusals: 409
 /// `ecommerce/insufficient-stock` (with `lines` indexes; nothing is
 /// held), the quote's own typed 409/422 problems, 400 validation.
 #[utoipa::path(
@@ -346,7 +350,7 @@ pub async fn get_public_shipping_methods(
     tag = "product_access",
     operation_id = "public_ecommerce_checkout_start",
     params(
-        ("Idempotency-Key" = String, Header, description = "One key per checkout intent; reused across retries of the same intent, re-minted after a payload edit"),
+        ("Idempotency-Key" = String, Header, description = "One key per cart and contact; reused across retries and shipping method or address corrections, re-minted after cart or contact edits"),
         ("host" = Option<String>, Query, description = "Host override for server-side callers; defaults to the request Host")
     ),
     request_body = crate::application::shopper::ShopperStartCheckoutRequest,
@@ -390,7 +394,6 @@ pub async fn post_public_checkout(
     responses(
         (status = 204, description = "Released (or already released, committed, or expired)"),
         (status = 400, description = "The checkout reference is not valid", body = sanvi_http::ProblemDetail),
-        (status = 409, description = "Checkout terms need re-approval (`checkout-refresh-required`: a legacy pre-quote token cannot be released; its hold expires)", body = sanvi_http::ProblemDetail),
         (status = 502, description = "The store service answered unexpectedly", body = sanvi_http::ProblemDetail),
         (status = 503, description = "The store service is not configured or unreachable", body = sanvi_http::ProblemDetail)
     )
@@ -432,7 +435,7 @@ pub async fn post_public_checkout_release(
         (status = 200, description = "The placed order (a replayed intent returns the original)", body = crate::application::shopper::ShopperOrderConfirmationView),
         (status = 400, description = "The checkout reference is not valid", body = sanvi_http::ProblemDetail),
         (status = 404, description = "No store for this host", body = sanvi_http::ProblemDetail),
-        (status = 409, description = "Checkout expired, checkout terms need re-approval (`checkout-refresh-required`: a legacy pre-quote token), prices changed, reservation expired or already ordered (typed problem)", body = sanvi_http::ProblemDetail),
+        (status = 409, description = "Checkout expired, checkout terms need re-approval (`ecommerce/checkout-refresh-required`: a legacy pre-quote token), prices changed, reservation expired or already ordered (typed problem)", body = sanvi_http::ProblemDetail),
         (status = 422, description = "Upstream refusal (total too large, destination not served)", body = sanvi_http::ProblemDetail),
         (status = 502, description = "The store service answered unexpectedly", body = sanvi_http::ProblemDetail),
         (status = 503, description = "The store service is not configured or unreachable", body = sanvi_http::ProblemDetail)
